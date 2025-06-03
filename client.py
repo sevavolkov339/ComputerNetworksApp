@@ -321,6 +321,7 @@ class ChatClient:
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
                 if contact == message.get('sender') or contact == message.get('receiver'):
+                    # Добавляем сообщение о файле в историю
                     self.request_history(contact)
             return
         elif message.get('action') == 'contacts':
@@ -392,6 +393,10 @@ class ChatClient:
                 messagebox.showerror("Error", "File size exceeds 10MB limit")
                 return
 
+            # Показываем индикатор загрузки
+            self.send_file_btn.config(text="Uploading...", state='disabled')
+            self.root.update()
+
             # Read file in chunks
             chunk_size = 1024 * 1024  # 1MB chunks
             with open(file_path, 'rb') as f:
@@ -429,7 +434,7 @@ class ChatClient:
                         raise RuntimeError("Socket connection broken")
                     total_sent += sent
                 
-                # After sending file, update history
+                # После отправки файла обновляем историю
                 self.request_history(receiver)
                 messagebox.showinfo("Success", "File sent successfully")
             except (BrokenPipeError, ConnectionResetError) as e:
@@ -459,6 +464,10 @@ class ChatClient:
             messagebox.showerror("Error", f"Failed to send file: {str(e)}")
             if not self.connected:
                 self.connect()
+        finally:
+            # Восстанавливаем кнопку
+            self.send_file_btn.config(text="Send File", state='normal')
+            self.root.update()
 
     def receive_messages(self):
         """Receive messages from server"""

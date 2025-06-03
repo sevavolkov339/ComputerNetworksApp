@@ -268,6 +268,8 @@ class ChatServer:
         file_data = message.get('file_data')
         file_name = message.get('file_name')
         
+        logging.info(f"Received file transfer request from {sender} to {receiver}, file: {file_name}")
+        
         if not all([sender, receiver, file_data, file_name]):
             logging.error("Missing required file transfer data")
             return
@@ -280,6 +282,7 @@ class ChatServer:
             # Декодируем file_data из base64
             try:
                 file_bytes = base64.b64decode(file_data)
+                logging.info(f"Successfully decoded file data for {file_name}")
             except Exception as e:
                 logging.error(f"Error decoding file data: {str(e)}")
                 return
@@ -289,6 +292,7 @@ class ChatServer:
             try:
                 with open(file_path, 'wb') as f:
                     f.write(file_bytes)
+                logging.info(f"File saved successfully at {file_path}")
             except Exception as e:
                 logging.error(f"Error saving file: {str(e)}")
                 return
@@ -308,6 +312,7 @@ class ChatServer:
                     VALUES (?, ?, ?, ?)
                 ''', (sender_id, receiver_id, file_path, f"[File: {file_name}]"))
                 conn.commit()
+                logging.info(f"File reference stored in database for {file_name}")
             except Exception as e:
                 logging.error(f"Error storing file in database: {str(e)}")
                 return
@@ -324,14 +329,18 @@ class ChatServer:
                             'timestamp': datetime.now().isoformat(),
                             'receiver': receiver
                         }
-                        # Отправляем сообщение частями, если оно большое
+                        # Отправляем размер данных
                         json_data = json.dumps(forward_message, ensure_ascii=False).encode()
+                        size_data = len(json_data).to_bytes(4, byteorder='big')
+                        client.send(size_data)
+                        # Отправляем данные частями
                         total_sent = 0
                         while total_sent < len(json_data):
                             sent = client.send(json_data[total_sent:total_sent + 8192])
                             if sent == 0:
                                 raise RuntimeError("Socket connection broken")
                             total_sent += sent
+                        logging.info(f"File forwarded to {receiver}")
                     except Exception as e:
                         logging.error(f"Error forwarding file: {str(e)}")
                     break
@@ -344,7 +353,11 @@ class ChatServer:
                     'file_name': file_name,
                     'timestamp': datetime.now().isoformat()
                 }
-                client_socket.send(json.dumps(confirmation, ensure_ascii=False).encode())
+                response_data = json.dumps(confirmation, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
+                logging.info(f"Sent confirmation to sender {sender}")
             except Exception as e:
                 logging.error(f"Error sending confirmation: {str(e)}")
                     
@@ -356,7 +369,10 @@ class ChatServer:
                     'status': 'error',
                     'message': str(e)
                 }
-                client_socket.send(json.dumps(error_response, ensure_ascii=False).encode())
+                response_data = json.dumps(error_response, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
             except:
                 pass
         finally:
