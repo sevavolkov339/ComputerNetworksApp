@@ -85,12 +85,19 @@ class ChatServer:
         """Handle individual client connections"""
         try:
             while True:
-                data = client_socket.recv(4096)
+                data = client_socket.recv(8192)  # Увеличиваем размер буфера
                 if not data:
                     break
                     
-                message = json.loads(data.decode())
-                self.process_message(client_socket, message)
+                try:
+                    message = json.loads(data.decode())
+                    self.process_message(client_socket, message)
+                except json.JSONDecodeError as e:
+                    logging.error(f"JSON decode error: {str(e)}")
+                    continue
+                except Exception as e:
+                    logging.error(f"Error processing message: {str(e)}")
+                    continue
                 
         except Exception as e:
             logging.error(f"Error handling client: {str(e)}")
@@ -216,6 +223,7 @@ class ChatServer:
         file_name = message.get('file_name')
         
         if not all([sender, receiver, file_data, file_name]):
+            logging.error("Missing required file transfer data")
             return
             
         try:
@@ -224,59 +232,80 @@ class ChatServer:
                 os.makedirs('files')
                 
             # Декодируем file_data из base64
-            file_bytes = base64.b64decode(file_data)
+            try:
+                file_bytes = base64.b64decode(file_data)
+            except Exception as e:
+                logging.error(f"Error decoding file data: {str(e)}")
+                return
             
             # Save file
             file_path = os.path.join('files', f"{datetime.now().timestamp()}_{file_name}")
-            with open(file_path, 'wb') as f:
-                f.write(file_bytes)
+            try:
+                with open(file_path, 'wb') as f:
+                    f.write(file_bytes)
+            except Exception as e:
+                logging.error(f"Error saving file: {str(e)}")
+                return
                 
             # Store file reference in database
             conn = sqlite3.connect('chat.db')
             cursor = conn.cursor()
             
-            cursor.execute('SELECT id FROM users WHERE username = ?', (sender,))
-            sender_id = cursor.fetchone()[0]
-            cursor.execute('SELECT id FROM users WHERE username = ?', (receiver,))
-            receiver_id = cursor.fetchone()[0]
-            
-            cursor.execute('''
-                INSERT INTO messages (sender_id, receiver_id, file_path, content)
-                VALUES (?, ?, ?, ?)
-            ''', (sender_id, receiver_id, file_path, f"[File: {file_name}]"))
-            conn.commit()
+            try:
+                cursor.execute('SELECT id FROM users WHERE username = ?', (sender,))
+                sender_id = cursor.fetchone()[0]
+                cursor.execute('SELECT id FROM users WHERE username = ?', (receiver,))
+                receiver_id = cursor.fetchone()[0]
+                
+                cursor.execute('''
+                    INSERT INTO messages (sender_id, receiver_id, file_path, content)
+                    VALUES (?, ?, ?, ?)
+                ''', (sender_id, receiver_id, file_path, f"[File: {file_name}]"))
+                conn.commit()
+            except Exception as e:
+                logging.error(f"Error storing file in database: {str(e)}")
+                return
             
             # Forward file to receiver if online
             for client, username in self.clients.items():
                 if username == receiver:
-                    forward_message = {
-                        'action': 'file',
-                        'sender': sender,
-                        'file_name': file_name,
-                        'file_data': file_data,  # Отправляем оригинальные данные
-                        'timestamp': datetime.now().isoformat(),
-                        'receiver': receiver
-                    }
-                    client.send(json.dumps(forward_message, ensure_ascii=False).encode())
+                    try:
+                        forward_message = {
+                            'action': 'file',
+                            'sender': sender,
+                            'file_name': file_name,
+                            'file_data': file_data,
+                            'timestamp': datetime.now().isoformat(),
+                            'receiver': receiver
+                        }
+                        client.send(json.dumps(forward_message, ensure_ascii=False).encode())
+                    except Exception as e:
+                        logging.error(f"Error forwarding file: {str(e)}")
                     break
                     
             # Отправляем подтверждение отправителю
-            confirmation = {
-                'action': 'file',
-                'status': 'success',
-                'file_name': file_name,
-                'timestamp': datetime.now().isoformat()
-            }
-            client_socket.send(json.dumps(confirmation, ensure_ascii=False).encode())
+            try:
+                confirmation = {
+                    'action': 'file',
+                    'status': 'success',
+                    'file_name': file_name,
+                    'timestamp': datetime.now().isoformat()
+                }
+                client_socket.send(json.dumps(confirmation, ensure_ascii=False).encode())
+            except Exception as e:
+                logging.error(f"Error sending confirmation: {str(e)}")
                     
         except Exception as e:
             logging.error(f"Error handling file transfer: {str(e)}")
-            error_response = {
-                'action': 'file',
-                'status': 'error',
-                'message': str(e)
-            }
-            client_socket.send(json.dumps(error_response, ensure_ascii=False).encode())
+            try:
+                error_response = {
+                    'action': 'file',
+                    'status': 'error',
+                    'message': str(e)
+                }
+                client_socket.send(json.dumps(error_response, ensure_ascii=False).encode())
+            except:
+                pass
         finally:
             conn.close()
             

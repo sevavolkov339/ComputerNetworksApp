@@ -387,19 +387,36 @@ class ChatClient:
             }
             
             try:
-                self.socket.send(json.dumps(data, ensure_ascii=False).encode())
+                # Разбиваем данные на части, если они слишком большие
+                json_data = json.dumps(data, ensure_ascii=False).encode()
+                if len(json_data) > 8192:  # Если данные больше 8KB
+                    # Отправляем частями
+                    total_sent = 0
+                    while total_sent < len(json_data):
+                        sent = self.socket.send(json_data[total_sent:total_sent + 8192])
+                        if sent == 0:
+                            raise RuntimeError("Socket connection broken")
+                        total_sent += sent
+                else:
+                    self.socket.send(json_data)
+                
                 # After sending file, update history
                 self.request_history(receiver)
                 messagebox.showinfo("Success", "File sent successfully")
-            except BrokenPipeError:
-                # Если произошла ошибка broken pipe, пробуем переподключиться
-                self.socket.close()
+            except (BrokenPipeError, ConnectionResetError) as e:
+                # Если произошла ошибка соединения, пробуем переподключиться
+                try:
+                    self.socket.close()
+                except:
+                    pass
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.socket.connect((self.host, self.port))
                 # Повторяем отправку
                 self.socket.send(json.dumps(data, ensure_ascii=False).encode())
                 self.request_history(receiver)
                 messagebox.showinfo("Success", "File sent successfully after reconnection")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to send file: {str(e)}")
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to send file: {str(e)}")
@@ -411,7 +428,7 @@ class ChatClient:
         buffer = ""
         while self.connected:
             try:
-                data = self.socket.recv(4096)
+                data = self.socket.recv(8192)  # Увеличиваем размер буфера
                 if not data:
                     break
                     
