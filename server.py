@@ -272,6 +272,15 @@ class ChatServer:
         
         if not all([sender, receiver, file_data, file_name]):
             logging.error("Missing required file transfer data")
+            response = {
+                'action': 'file',
+                'status': 'error',
+                'message': 'Missing required file transfer data'
+            }
+            response_data = json.dumps(response, ensure_ascii=False).encode()
+            size_data = len(response_data).to_bytes(4, byteorder='big')
+            client_socket.send(size_data)
+            client_socket.send(response_data)
             return
             
         try:
@@ -285,6 +294,15 @@ class ChatServer:
                 logging.info(f"Successfully decoded file data for {file_name}")
             except Exception as e:
                 logging.error(f"Error decoding file data: {str(e)}")
+                response = {
+                    'action': 'file',
+                    'status': 'error',
+                    'message': f'Error decoding file data: {str(e)}'
+                }
+                response_data = json.dumps(response, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
                 return
             
             # Save file
@@ -295,6 +313,15 @@ class ChatServer:
                 logging.info(f"File saved successfully at {file_path}")
             except Exception as e:
                 logging.error(f"Error saving file: {str(e)}")
+                response = {
+                    'action': 'file',
+                    'status': 'error',
+                    'message': f'Error saving file: {str(e)}'
+                }
+                response_data = json.dumps(response, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
                 return
                 
             # Store file reference in database
@@ -315,6 +342,15 @@ class ChatServer:
                 logging.info(f"File reference stored in database for {file_name}")
             except Exception as e:
                 logging.error(f"Error storing file in database: {str(e)}")
+                response = {
+                    'action': 'file',
+                    'status': 'error',
+                    'message': f'Error storing file in database: {str(e)}'
+                }
+                response_data = json.dumps(response, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
                 return
             
             # Forward file to receiver if online
@@ -333,13 +369,7 @@ class ChatServer:
                         json_data = json.dumps(forward_message, ensure_ascii=False).encode()
                         size_data = len(json_data).to_bytes(4, byteorder='big')
                         client.send(size_data)
-                        # Отправляем данные частями
-                        total_sent = 0
-                        while total_sent < len(json_data):
-                            sent = client.send(json_data[total_sent:total_sent + 8192])
-                            if sent == 0:
-                                raise RuntimeError("Socket connection broken")
-                            total_sent += sent
+                        client.send(json_data)
                         logging.info(f"File forwarded to {receiver}")
                     except Exception as e:
                         logging.error(f"Error forwarding file: {str(e)}")

@@ -419,46 +419,37 @@ class ChatClient:
             }
             
             try:
-                # Разбиваем данные на части, если они слишком большие
-                json_data = json.dumps(data, ensure_ascii=False).encode()
-                
-                # Отправляем размер данных
-                size_data = len(json_data).to_bytes(4, byteorder='big')
-                self.socket.send(size_data)
-                
-                # Отправляем данные частями
-                total_sent = 0
-                while total_sent < len(json_data):
-                    sent = self.socket.send(json_data[total_sent:total_sent + 8192])
-                    if sent == 0:
-                        raise RuntimeError("Socket connection broken")
-                    total_sent += sent
-                
-                # После отправки файла обновляем историю
-                self.request_history(receiver)
-                messagebox.showinfo("Success", "File sent successfully")
-            except (BrokenPipeError, ConnectionResetError) as e:
-                # Если произошла ошибка соединения, пробуем переподключиться
-                try:
-                    self.socket.close()
-                except:
-                    pass
-                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.socket.connect((self.host, self.port))
-                # Повторяем отправку
+                # Отправляем данные
                 json_data = json.dumps(data, ensure_ascii=False).encode()
                 size_data = len(json_data).to_bytes(4, byteorder='big')
                 self.socket.send(size_data)
-                total_sent = 0
-                while total_sent < len(json_data):
-                    sent = self.socket.send(json_data[total_sent:total_sent + 8192])
-                    if sent == 0:
-                        raise RuntimeError("Socket connection broken")
-                    total_sent += sent
-                self.request_history(receiver)
-                messagebox.showinfo("Success", "File sent successfully after reconnection")
+                self.socket.send(json_data)
+                
+                # Ждем подтверждения от сервера
+                size_data = self.socket.recv(4)
+                if not size_data:
+                    raise RuntimeError("No response from server")
+                size = int.from_bytes(size_data, byteorder='big')
+                
+                response_data = b""
+                while len(response_data) < size:
+                    chunk = self.socket.recv(min(size - len(response_data), 8192))
+                    if not chunk:
+                        raise RuntimeError("Connection broken")
+                    response_data += chunk
+                
+                response = json.loads(response_data.decode())
+                if response.get('status') == 'success':
+                    # После успешной отправки обновляем историю
+                    self.request_history(receiver)
+                    messagebox.showinfo("Success", "File sent successfully")
+                else:
+                    messagebox.showerror("Error", response.get('message', 'Failed to send file'))
+                
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to send file: {str(e)}")
+                if not self.connected:
+                    self.connect()
                 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to send file: {str(e)}")
