@@ -168,6 +168,8 @@ class ChatServer:
         username = message.get('username')
         password = message.get('password')
         
+        logging.info(f"Login attempt for user: {username}")
+        
         try:
             conn = sqlite3.connect('chat.db')
             cursor = conn.cursor()
@@ -177,15 +179,43 @@ class ChatServer:
             
             if result and bcrypt.checkpw(password.encode(), result[1]):
                 self.clients[client_socket] = username
-                response = {'status': 'success', 'message': 'Login successful', 'action': 'login'}
+                response = {
+                    'status': 'success',
+                    'message': 'Login successful',
+                    'action': 'login',
+                    'username': username
+                }
+                logging.info(f"Login successful for user: {username}")
             else:
-                response = {'status': 'error', 'message': 'Invalid credentials', 'action': 'login'}
+                response = {
+                    'status': 'error',
+                    'message': 'Invalid credentials',
+                    'action': 'login'
+                }
+                logging.warning(f"Login failed for user: {username}")
+                
+            # Отправляем ответ
+            response_data = json.dumps(response, ensure_ascii=False).encode()
+            # Отправляем размер данных
+            size_data = len(response_data).to_bytes(4, byteorder='big')
+            client_socket.send(size_data)
+            # Отправляем данные
+            client_socket.send(response_data)
+            logging.info(f"Sent login response to {username}")
+            
         except Exception as e:
-            response = {'status': 'error', 'message': str(e), 'action': 'login'}
+            logging.error(f"Error during login: {str(e)}")
+            response = {
+                'status': 'error',
+                'message': str(e),
+                'action': 'login'
+            }
+            response_data = json.dumps(response, ensure_ascii=False).encode()
+            size_data = len(response_data).to_bytes(4, byteorder='big')
+            client_socket.send(size_data)
+            client_socket.send(response_data)
         finally:
             conn.close()
-            
-        client_socket.send(json.dumps(response, ensure_ascii=False).encode())
         
     def handle_message(self, client_socket, message):
         """Handle text messages"""
@@ -348,7 +378,10 @@ class ChatServer:
                 contact = cursor.fetchone()
                 if not contact:
                     response = {'status': 'error', 'message': 'Contact user does not exist', 'action': 'contacts'}
-                    client_socket.send(json.dumps(response, ensure_ascii=False).encode())
+                    response_data = json.dumps(response, ensure_ascii=False).encode()
+                    size_data = len(response_data).to_bytes(4, byteorder='big')
+                    client_socket.send(size_data)
+                    client_socket.send(response_data)
                 else:
                     # Добавляем только если такой связи еще нет
                     cursor.execute('''
@@ -368,7 +401,10 @@ class ChatServer:
                     ''', (username,))
                     contacts = [row[0] for row in cursor.fetchall()]
                     response = {'status': 'success', 'message': 'Contact added successfully', 'contacts': contacts, 'action': 'contacts'}
-                    client_socket.send(json.dumps(response, ensure_ascii=False).encode())
+                    response_data = json.dumps(response, ensure_ascii=False).encode()
+                    size_data = len(response_data).to_bytes(4, byteorder='big')
+                    client_socket.send(size_data)
+                    client_socket.send(response_data)
                 return
                 
             elif action == 'list':
@@ -381,7 +417,10 @@ class ChatServer:
                 ''', (username,))
                 contacts = [row[0] for row in cursor.fetchall()]
                 response = {'status': 'success', 'contacts': contacts, 'action': 'contacts'}
-                client_socket.send(json.dumps(response, ensure_ascii=False).encode())
+                response_data = json.dumps(response, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
                 
             elif action == 'history':
                 # Получаем id пользователей
@@ -407,12 +446,18 @@ class ChatServer:
                         'timestamp': row[3]
                     })
                 response = {'status': 'success', 'action': 'history', 'messages': messages}
-                client_socket.send(json.dumps(response, ensure_ascii=False).encode())
+                response_data = json.dumps(response, ensure_ascii=False).encode()
+                size_data = len(response_data).to_bytes(4, byteorder='big')
+                client_socket.send(size_data)
+                client_socket.send(response_data)
                 return
                 
         except Exception as e:
             response = {'status': 'error', 'message': str(e), 'action': action or 'contacts'}
-            client_socket.send(json.dumps(response, ensure_ascii=False).encode())
+            response_data = json.dumps(response, ensure_ascii=False).encode()
+            size_data = len(response_data).to_bytes(4, byteorder='big')
+            client_socket.send(size_data)
+            client_socket.send(response_data)
         finally:
             conn.close()
 

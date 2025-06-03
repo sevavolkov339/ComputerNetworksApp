@@ -154,7 +154,18 @@ class ChatClient:
             'password': password
         }
         
-        self.socket.send(json.dumps(message, ensure_ascii=False).encode())
+        try:
+            print(f"Sending login request for user: {username}")
+            # Отправляем данные
+            json_data = json.dumps(message, ensure_ascii=False).encode()
+            # Отправляем размер данных
+            size_data = len(json_data).to_bytes(4, byteorder='big')
+            self.socket.send(size_data)
+            # Отправляем данные
+            self.socket.send(json_data)
+        except Exception as e:
+            print(f"Error sending login request: {str(e)}")
+            messagebox.showerror("Error", f"Failed to send login request: {str(e)}")
         
     def register(self):
         """Handle registration"""
@@ -279,14 +290,18 @@ class ChatClient:
 
     def handle_message(self, message):
         """Handle incoming messages"""
+        print(f"Received message: {message}")
+        
         if message.get('status') == 'error':
             messagebox.showerror("Error", message.get('message'))
             return
         
         if message.get('status') == 'success' and message.get('action') in ('login', 'register'):
-            self.username = self.username_entry.get()
+            print("Login/Register successful, switching to chat interface")
+            self.username = message.get('username', self.username_entry.get())
             self.login_frame.place_forget()
             self.chat_frame.place(relx=0.5, rely=0.5, anchor='center')
+            # Загружаем контакты сразу после успешного входа
             self.load_contacts()
             return
         
@@ -306,7 +321,6 @@ class ChatClient:
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
                 if contact == message.get('sender') or contact == message.get('receiver'):
-                    # Добавляем файл в историю
                     self.request_history(contact)
             return
         elif message.get('action') == 'contacts':
@@ -315,16 +329,29 @@ class ChatClient:
                     self.contacts_listbox.delete(0, tk.END)
                     for contact in message['contacts']:
                         self.contacts_listbox.insert(tk.END, contact)
+                    # Если есть контакты, выбираем первый и загружаем его историю
+                    if message['contacts']:
+                        self.contacts_listbox.selection_set(0)
+                        self.request_history(message['contacts'][0])
             if message.get('message') == 'Contact added successfully':
                 self.load_contacts()
 
     def request_history(self, contact):
+        """Request chat history with a contact"""
+        print(f"Requesting history for contact: {contact}")
         message = {
             'action': 'contacts',
             'contact_action': 'history',
             'contact_username': contact
         }
-        self.socket.send(json.dumps(message, ensure_ascii=False).encode())
+        try:
+            json_data = json.dumps(message, ensure_ascii=False).encode()
+            size_data = len(json_data).to_bytes(4, byteorder='big')
+            self.socket.send(size_data)
+            self.socket.send(json_data)
+        except Exception as e:
+            print(f"Error requesting history: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load chat history: {str(e)}")
 
     def send_message(self):
         if not self.connected:
@@ -441,12 +468,19 @@ class ChatClient:
                 # Сначала получаем размер данных
                 size_data = self.socket.recv(4)
                 if not size_data:
+                    print("Connection closed by server")
                     break
                 size = int.from_bytes(size_data, byteorder='big')
+                print(f"Received message size: {size}")
+                
+                if size > 1024 * 1024:  # Если размер больше 1MB, что-то не так
+                    print(f"Invalid message size: {size}")
+                    continue
                 
                 # Получаем данные
                 data = self.socket.recv(min(size, 8192))
                 if not data:
+                    print("No data received")
                     break
                     
                 buffer += data
@@ -459,6 +493,7 @@ class ChatClient:
                 if len(buffer) == size:
                     try:
                         message = json.loads(buffer.decode())
+                        print(f"Processing message: {message}")
                         self.handle_message(message)
                     except json.JSONDecodeError as e:
                         print(f"JSON decode error: {str(e)}")
@@ -489,12 +524,20 @@ class ChatClient:
         
     def load_contacts(self):
         """Load contact list"""
+        print("Loading contacts...")
         message = {
             'action': 'contacts',
             'contact_action': 'list'
         }
-        self.socket.send(json.dumps(message, ensure_ascii=False).encode())
-        
+        try:
+            json_data = json.dumps(message, ensure_ascii=False).encode()
+            size_data = len(json_data).to_bytes(4, byteorder='big')
+            self.socket.send(size_data)
+            self.socket.send(json_data)
+        except Exception as e:
+            print(f"Error loading contacts: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load contacts: {str(e)}")
+
     def on_contact_select(self, event):
         selected = self.contacts_listbox.curselection()
         if not selected:
