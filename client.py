@@ -389,16 +389,18 @@ class ChatClient:
             try:
                 # Разбиваем данные на части, если они слишком большие
                 json_data = json.dumps(data, ensure_ascii=False).encode()
-                if len(json_data) > 8192:  # Если данные больше 8KB
-                    # Отправляем частями
-                    total_sent = 0
-                    while total_sent < len(json_data):
-                        sent = self.socket.send(json_data[total_sent:total_sent + 8192])
-                        if sent == 0:
-                            raise RuntimeError("Socket connection broken")
-                        total_sent += sent
-                else:
-                    self.socket.send(json_data)
+                
+                # Отправляем размер данных
+                size_data = len(json_data).to_bytes(4, byteorder='big')
+                self.socket.send(size_data)
+                
+                # Отправляем данные частями
+                total_sent = 0
+                while total_sent < len(json_data):
+                    sent = self.socket.send(json_data[total_sent:total_sent + 8192])
+                    if sent == 0:
+                        raise RuntimeError("Socket connection broken")
+                    total_sent += sent
                 
                 # After sending file, update history
                 self.request_history(receiver)
@@ -412,7 +414,15 @@ class ChatClient:
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.socket.connect((self.host, self.port))
                 # Повторяем отправку
-                self.socket.send(json.dumps(data, ensure_ascii=False).encode())
+                json_data = json.dumps(data, ensure_ascii=False).encode()
+                size_data = len(json_data).to_bytes(4, byteorder='big')
+                self.socket.send(size_data)
+                total_sent = 0
+                while total_sent < len(json_data):
+                    sent = self.socket.send(json_data[total_sent:total_sent + 8192])
+                    if sent == 0:
+                        raise RuntimeError("Socket connection broken")
+                    total_sent += sent
                 self.request_history(receiver)
                 messagebox.showinfo("Success", "File sent successfully after reconnection")
             except Exception as e:
@@ -425,35 +435,36 @@ class ChatClient:
 
     def receive_messages(self):
         """Receive messages from server"""
-        buffer = ""
+        buffer = b""
         while self.connected:
             try:
-                data = self.socket.recv(8192)  # Увеличиваем размер буфера
+                # Сначала получаем размер данных
+                size_data = self.socket.recv(4)
+                if not size_data:
+                    break
+                size = int.from_bytes(size_data, byteorder='big')
+                
+                # Получаем данные
+                data = self.socket.recv(min(size, 8192))
                 if not data:
                     break
                     
-                buffer += data.decode(errors='replace')
-                while True:
+                buffer += data
+                while len(buffer) < size:
+                    data = self.socket.recv(min(size - len(buffer), 8192))
+                    if not data:
+                        break
+                    buffer += data
+                
+                if len(buffer) == size:
                     try:
-                        # Try to find complete JSON objects
-                        start = buffer.find('{')
-                        if start == -1:
-                            buffer = ""
-                            break
-                        buffer = buffer[start:]
-                        
-                        # Try to parse the JSON
-                        message = json.loads(buffer)
+                        message = json.loads(buffer.decode())
                         self.handle_message(message)
-                        buffer = ""
-                        break
-                    except json.JSONDecodeError:
-                        # If JSON is incomplete, wait for more data
-                        break
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error: {str(e)}")
                     except Exception as e:
                         print(f"Error processing message: {str(e)}")
-                        buffer = ""
-                        break
+                    buffer = b""
                 
             except socket.error as e:
                 print(f"Socket error: {str(e)}")

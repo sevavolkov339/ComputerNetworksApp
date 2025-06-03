@@ -83,21 +83,37 @@ class ChatServer:
             
     def handle_client(self, client_socket):
         """Handle individual client connections"""
+        buffer = b""
         try:
             while True:
-                data = client_socket.recv(8192)  # Увеличиваем размер буфера
+                data = client_socket.recv(8192)
                 if not data:
                     break
                     
-                try:
-                    message = json.loads(data.decode())
-                    self.process_message(client_socket, message)
-                except json.JSONDecodeError as e:
-                    logging.error(f"JSON decode error: {str(e)}")
-                    continue
-                except Exception as e:
-                    logging.error(f"Error processing message: {str(e)}")
-                    continue
+                buffer += data
+                while True:
+                    try:
+                        # Ищем начало JSON объекта
+                        start = buffer.find(b'{')
+                        if start == -1:
+                            buffer = b""
+                            break
+                        buffer = buffer[start:]
+                        
+                        # Пробуем декодировать JSON
+                        try:
+                            message = json.loads(buffer.decode())
+                            self.process_message(client_socket, message)
+                            buffer = b""
+                            break
+                        except json.JSONDecodeError:
+                            # Если JSON неполный, ждем следующую порцию данных
+                            break
+                            
+                    except Exception as e:
+                        logging.error(f"Error processing message: {str(e)}")
+                        buffer = b""
+                        break
                 
         except Exception as e:
             logging.error(f"Error handling client: {str(e)}")
@@ -278,7 +294,14 @@ class ChatServer:
                             'timestamp': datetime.now().isoformat(),
                             'receiver': receiver
                         }
-                        client.send(json.dumps(forward_message, ensure_ascii=False).encode())
+                        # Отправляем сообщение частями, если оно большое
+                        json_data = json.dumps(forward_message, ensure_ascii=False).encode()
+                        total_sent = 0
+                        while total_sent < len(json_data):
+                            sent = client.send(json_data[total_sent:total_sent + 8192])
+                            if sent == 0:
+                                raise RuntimeError("Socket connection broken")
+                            total_sent += sent
                     except Exception as e:
                         logging.error(f"Error forwarding file: {str(e)}")
                     break
