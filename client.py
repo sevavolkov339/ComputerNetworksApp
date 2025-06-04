@@ -416,18 +416,44 @@ class ChatClient:
             selected = self.contacts_listbox.curselection()
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
+                # Обновляем историю только если сообщение для текущего активного контакта
                 if contact == message.get('sender') or contact == message.get('receiver'):
-                    # Добавляем сообщение в историю в основном потоке через after
                     self.root.after(1, self.request_history, contact)
             return
         elif message.get('action') == 'file':
-            selected = self.contacts_listbox.curselection()
-            if selected:
-                contact = self.contacts_listbox.get(selected[0])
-                if contact == message.get('sender') or contact == message.get('receiver'):
-                    # Добавляем сообщение о файле в историю в основном потоке через after
-                    self.root.after(1, self.request_history, contact)
-            return
+             # Этот блок обрабатывает *подтверждение* об отправке файла от сервера ИЛИ входящий файл
+            status = message.get('status')
+            if status == 'success':
+                file_name = message.get('file_name')
+                file_path = message.get('file_path') # Путь с прямыми слэшами от сервера
+                sender = message.get('sender')
+                
+                # Если это подтверждение об отправке (action=file, status=success)
+                if message.get('action') == 'file' and 'file_path' in message and 'file_name' in message:
+                    selected = self.contacts_listbox.curselection()
+                    if selected:
+                         contact = self.contacts_listbox.get(selected[0])
+                         # Обновляем историю только если подтверждение для текущего активного контакта
+                         if contact == message.get('receiver'): # Подтверждение отправляется получателю в этом случае
+                            self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
+                            self.root.after(1, self.request_history, contact)
+                         elif contact == message.get('sender'): # Подтверждение отправляется отправителю
+                             self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
+                             self.root.after(1, self.request_history, contact)
+                         
+                # Если это входящее сообщение с файлом (action=message, is_file=True)
+                elif message.get('action') == 'message' and message.get('is_file'):
+                    selected = self.contacts_listbox.curselection()
+                    if selected:
+                        contact = self.contacts_listbox.get(selected[0])
+                        # Обновляем историю только если файл для текущего активного контакта
+                        if contact == message.get('sender') or contact == message.get('receiver'):
+                             self.root.after(1, self.request_history, contact)
+                
+            else:
+                error_msg = message.get('message', 'Unknown error')
+                self.root.after(1, messagebox.showerror, "Error", f"File transfer failed: {error_msg}")
+
         elif message.get('action') == 'contacts':
             if message.get('status') == 'success':
                 if 'contacts' in message:
@@ -528,27 +554,7 @@ class ChatClient:
                 self.socket.send(size_data)
                 self.socket.send(json_data)
                 
-                # Ждем подтверждения от сервера
-                # Этот блок может блокировать GUI, если receive_messages не в отдельном потоке или обработка ответа долгая
-                # size_data = self.socket.recv(4)
-                # if not size_data:
-                #     raise RuntimeError("No response from server")
-                # size = int.from_bytes(size_data, byteorder='big')
-                
-                # response_data = b""
-                # while len(response_data) < size:
-                #     chunk = self.socket.recv(min(size - len(response_data), 8192))
-                #     if not chunk:
-                #         raise RuntimeError("Connection broken")
-                #     response_data += chunk
-                
-                # response = json.loads(response_data.decode())
-                # if response.get('status') == 'success':
-                #     # После успешной отправки обновляем историю
-                #     self.request_history(receiver)
-                #     messagebox.showinfo("Success", "File sent successfully")
-                # else:
-                #     messagebox.showerror("Error", response.get('message', 'Failed to send file'))
+                # Не ждем ответа здесь, его обработает receive_messages в другом потоке
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to send file: {str(e)}")
@@ -561,6 +567,7 @@ class ChatClient:
                 self.connect()
         finally:
             # Восстанавливаем кнопку в основном потоке через after
+            # Обновление истории чата должно происходить при получении подтверждения от сервера
             self.root.after(100, lambda: self.send_file_btn.config(text="Send File", state='normal'))
 
     def receive_messages(self):
