@@ -271,6 +271,8 @@ class ChatClient:
     def handle_file_click(self, file_path):
         """Handle click on file in chat"""
         try:
+            # Явно заменяем обратные слэши на прямые перед нормализацией
+            file_path = file_path.replace('\\', '/')
             # Нормализуем путь для текущей ОС
             file_path_local = os.path.normpath(file_path)
             
@@ -279,8 +281,18 @@ class ChatClient:
             
             # Проверяем существование файла
             if not os.path.exists(file_path_local):
-                messagebox.showerror("Error", f"File not found locally: {file_path_local}")
-                return
+                # Попробуем найти файл в папке files, если путь не абсолютный
+                if not os.path.isabs(file_path_local):
+                     alternative_path = os.path.join('files', file_name)
+                     alternative_path = os.path.normpath(alternative_path)
+                     if os.path.exists(alternative_path):
+                         file_path_local = alternative_path
+                     else:
+                        messagebox.showerror("Error", f"File not found locally: {file_path_local}")
+                        return
+                else:
+                    messagebox.showerror("Error", f"File not found locally: {file_path_local}")
+                    return
             
             # Создаем диалог для выбора действия
             dialog = tk.Toplevel(self.root)
@@ -361,9 +373,13 @@ class ChatClient:
             if sys.platform == 'win32':
                 os.startfile(file_path)
             elif sys.platform == 'darwin':  # macOS
-                subprocess.run(['open', file_path], shell=True)
+                subprocess.run(['open', file_path], shell=True, check=True)
             else:  # linux
-                subprocess.run(['xdg-open', file_path])
+                subprocess.run(['xdg-open', file_path], check=True)
+        except FileNotFoundError:
+             messagebox.showerror("Error", f"Application to open file not found.")
+        except subprocess.CalledProcessError as e:
+             messagebox.showerror("Error", f"Failed to open file: {e}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open file: {str(e)}")
 
@@ -394,8 +410,11 @@ class ChatClient:
         """Handle incoming messages"""
         print(f"Received message: {message}")
         
+        # Обрабатываем ошибки сразу в основном потоке, т.к. это всплывающие окна
         if message.get('status') == 'error':
-            messagebox.showerror("Error", message.get('message'))
+            error_msg = message.get('message', 'Unknown error')
+            action = message.get('action', 'Unknown action')
+            self.root.after(1, messagebox.showerror, "Error", f"{action.capitalize()} failed: {error_msg}")
             return
         
         if message.get('status') == 'success' and message.get('action') in ('login', 'register'):
@@ -404,7 +423,7 @@ class ChatClient:
             self.login_frame.place_forget()
             self.chat_frame.place(relx=0.5, rely=0.5, anchor='center')
             # Загружаем контакты сразу после успешного входа
-            self.load_contacts()
+            self.root.after(1, self.load_contacts)
             return
         
         if message.get('action') == 'history':
@@ -412,48 +431,27 @@ class ChatClient:
             self.root.after(1, self.display_history, message.get('messages', []))
             return
         
-        if message.get('action') == 'message':
+        # Обрабатываем входящие сообщения и файлы
+        if message.get('action') == 'message' or (message.get('action') == 'file' and message.get('is_file')):
             selected = self.contacts_listbox.curselection()
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
-                # Обновляем историю только если сообщение для текущего активного контакта
+                # Обновляем историю только если сообщение/файл для текущего активного контакта
                 if contact == message.get('sender') or contact == message.get('receiver'):
                     self.root.after(1, self.request_history, contact)
             return
-        elif message.get('action') == 'file':
-             # Этот блок обрабатывает *подтверждение* об отправке файла от сервера ИЛИ входящий файл
-            status = message.get('status')
-            if status == 'success':
-                file_name = message.get('file_name')
-                file_path = message.get('file_path') # Путь с прямыми слэшами от сервера
-                sender = message.get('sender')
-                
-                # Если это подтверждение об отправке (action=file, status=success)
-                if message.get('action') == 'file' and 'file_path' in message and 'file_name' in message:
-                    selected = self.contacts_listbox.curselection()
-                    if selected:
-                         contact = self.contacts_listbox.get(selected[0])
-                         # Обновляем историю только если подтверждение для текущего активного контакта
-                         if contact == message.get('receiver'): # Подтверждение отправляется получателю в этом случае
-                            self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
-                            self.root.after(1, self.request_history, contact)
-                         elif contact == message.get('sender'): # Подтверждение отправляется отправителю
-                             self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
-                             self.root.after(1, self.request_history, contact)
-                         
-                # Если это входящее сообщение с файлом (action=message, is_file=True)
-                elif message.get('action') == 'message' and message.get('is_file'):
-                    selected = self.contacts_listbox.curselection()
-                    if selected:
-                        contact = self.contacts_listbox.get(selected[0])
-                        # Обновляем историю только если файл для текущего активного контакта
-                        if contact == message.get('sender') or contact == message.get('receiver'):
-                             self.root.after(1, self.request_history, contact)
-                
-            else:
-                error_msg = message.get('message', 'Unknown error')
-                self.root.after(1, messagebox.showerror, "Error", f"File transfer failed: {error_msg}")
 
+        # Обрабатываем только подтверждение об отправке файла (status=success, action=file)
+        if message.get('action') == 'file' and message.get('status') == 'success':
+             selected = self.contacts_listbox.curselection()
+             if selected:
+                 contact = self.contacts_listbox.get(selected[0])
+                 # Обновляем историю только если подтверждение для текущего активного контакта (отправителя)
+                 if contact == message.get('receiver'): # Сервер отправляет подтверждение отправителю, который указан как receiver в этом сообщении
+                     self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
+                     # Обновляем историю после успешной отправки (это для отправителя)
+                     self.root.after(1, self.request_history, contact)
+                     
         elif message.get('action') == 'contacts':
             if message.get('status') == 'success':
                 if 'contacts' in message:
@@ -464,7 +462,7 @@ class ChatClient:
                     if message['contacts']:
                         self.root.after(1, lambda c=message['contacts'][0]: self.contacts_listbox.selection_set(0) or self.request_history(c))
             if message.get('message') == 'Contact added successfully':
-                self.load_contacts()
+                self.root.after(1, self.load_contacts)
 
     def request_history(self, contact):
         """Request chat history with a contact"""
@@ -554,7 +552,8 @@ class ChatClient:
                 self.socket.send(size_data)
                 self.socket.send(json_data)
                 
-                # Не ждем ответа здесь, его обработает receive_messages в другом потоке
+                # Сразу запрашиваем обновление истории у отправителя, не дожидаясь подтверждения
+                self.root.after(100, self.request_history, receiver) # Небольшая задержка, чтобы сервер успел обработать
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to send file: {str(e)}")
@@ -567,7 +566,6 @@ class ChatClient:
                 self.connect()
         finally:
             # Восстанавливаем кнопку в основном потоке через after
-            # Обновление истории чата должно происходить при получении подтверждения от сервера
             self.root.after(100, lambda: self.send_file_btn.config(text="Send File", state='normal'))
 
     def receive_messages(self):
