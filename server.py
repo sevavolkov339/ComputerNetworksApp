@@ -309,7 +309,9 @@ class ChatServer:
             timestamp = datetime.now().timestamp()
             safe_filename = f"{timestamp}_{file_name}"
             file_path = os.path.join('files', safe_filename)
+            # Нормализуем путь для хранения и передачи
             file_path = os.path.normpath(file_path)
+            file_path_for_clients = file_path.replace('\\', '/')
             
             try:
                 with open(file_path, 'wb') as f:
@@ -338,10 +340,11 @@ class ChatServer:
                 cursor.execute('SELECT id FROM users WHERE username = ?', (receiver,))
                 receiver_id = cursor.fetchone()[0]
                 
+                # Сохраняем путь с прямыми слэшами в БД
                 cursor.execute('''
                     INSERT INTO messages (sender_id, receiver_id, file_path, content)
                     VALUES (?, ?, ?, ?)
-                ''', (sender_id, receiver_id, file_path, f"[File: {file_name}]"))
+                ''', (sender_id, receiver_id, file_path_for_clients, f"[File: {file_name}]"))
                 conn.commit()
                 logging.info(f"File reference stored in database for {file_name}")
             except Exception as e:
@@ -366,7 +369,7 @@ class ChatServer:
                             'sender': sender,
                             'content': f"[File: {file_name}]",
                             'is_file': True,
-                            'file_path': file_path,
+                            'file_path': file_path_for_clients, # Отправляем путь с прямыми слэшами
                             'timestamp': datetime.now().isoformat()
                         }
                         # Отправляем размер данных
@@ -385,7 +388,7 @@ class ChatServer:
                     'action': 'file',
                     'status': 'success',
                     'file_name': file_name,
-                    'file_path': file_path,
+                    'file_path': file_path_for_clients, # Отправляем путь с прямыми слэшами
                     'timestamp': datetime.now().isoformat()
                 }
                 response_data = json.dumps(confirmation, ensure_ascii=False).encode()

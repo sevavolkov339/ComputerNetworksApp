@@ -271,12 +271,15 @@ class ChatClient:
     def handle_file_click(self, file_path):
         """Handle click on file in chat"""
         try:
+            # Нормализуем путь для текущей ОС
+            file_path_local = os.path.normpath(file_path)
+            
             # Извлекаем имя файла из пути
-            file_name = os.path.basename(file_path)
+            file_name = os.path.basename(file_path_local)
             
             # Проверяем существование файла
-            if not os.path.exists(file_path):
-                messagebox.showerror("Error", f"File not found: {file_path}")
+            if not os.path.exists(file_path_local):
+                messagebox.showerror("Error", f"File not found locally: {file_path_local}")
                 return
             
             # Создаем диалог для выбора действия
@@ -310,7 +313,7 @@ class ChatClient:
                 activebackground="#eaeaea",
                 width=10,
                 height=1,
-                command=lambda: [self.open_file(file_path), dialog.destroy()]
+                command=lambda: [self.open_file(file_path_local), dialog.destroy()]
             )
             open_button.pack(side=tk.LEFT, padx=12)
             
@@ -326,7 +329,7 @@ class ChatClient:
                 activebackground="#eaeaea",
                 width=12,
                 height=1,
-                command=lambda: [self.save_file(file_path), dialog.destroy()]
+                command=lambda: [self.save_file(file_path_local), dialog.destroy()]
             )
             save_button.pack(side=tk.LEFT, padx=12)
             
@@ -358,7 +361,6 @@ class ChatClient:
             if sys.platform == 'win32':
                 os.startfile(file_path)
             elif sys.platform == 'darwin':  # macOS
-                # Используем subprocess.run с shell=True для Mac
                 subprocess.run(['open', file_path], shell=True)
             else:  # linux
                 subprocess.run(['xdg-open', file_path])
@@ -406,7 +408,8 @@ class ChatClient:
             return
         
         if message.get('action') == 'history':
-            self.display_history(message.get('messages', []))
+            # Обновляем историю в основном потоке через after
+            self.root.after(1, self.display_history, message.get('messages', []))
             return
         
         if message.get('action') == 'message':
@@ -414,15 +417,16 @@ class ChatClient:
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
                 if contact == message.get('sender') or contact == message.get('receiver'):
-                    self.request_history(contact)
+                    # Добавляем сообщение в историю в основном потоке через after
+                    self.root.after(1, self.request_history, contact)
             return
         elif message.get('action') == 'file':
             selected = self.contacts_listbox.curselection()
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
                 if contact == message.get('sender') or contact == message.get('receiver'):
-                    # Добавляем сообщение о файле в историю
-                    self.request_history(contact)
+                    # Добавляем сообщение о файле в историю в основном потоке через after
+                    self.root.after(1, self.request_history, contact)
             return
         elif message.get('action') == 'contacts':
             if message.get('status') == 'success':
@@ -430,10 +434,9 @@ class ChatClient:
                     self.contacts_listbox.delete(0, tk.END)
                     for contact in message['contacts']:
                         self.contacts_listbox.insert(tk.END, contact)
-                    # Если есть контакты, выбираем первый и загружаем его историю
+                    # Если есть контакты, выбираем первый и загружаем его историю в основном потоке через after
                     if message['contacts']:
-                        self.contacts_listbox.selection_set(0)
-                        self.request_history(message['contacts'][0])
+                        self.root.after(1, lambda c=message['contacts'][0]: self.contacts_listbox.selection_set(0) or self.request_history(c))
             if message.get('message') == 'Contact added successfully':
                 self.load_contacts()
 
@@ -526,25 +529,26 @@ class ChatClient:
                 self.socket.send(json_data)
                 
                 # Ждем подтверждения от сервера
-                size_data = self.socket.recv(4)
-                if not size_data:
-                    raise RuntimeError("No response from server")
-                size = int.from_bytes(size_data, byteorder='big')
+                # Этот блок может блокировать GUI, если receive_messages не в отдельном потоке или обработка ответа долгая
+                # size_data = self.socket.recv(4)
+                # if not size_data:
+                #     raise RuntimeError("No response from server")
+                # size = int.from_bytes(size_data, byteorder='big')
                 
-                response_data = b""
-                while len(response_data) < size:
-                    chunk = self.socket.recv(min(size - len(response_data), 8192))
-                    if not chunk:
-                        raise RuntimeError("Connection broken")
-                    response_data += chunk
+                # response_data = b""
+                # while len(response_data) < size:
+                #     chunk = self.socket.recv(min(size - len(response_data), 8192))
+                #     if not chunk:
+                #         raise RuntimeError("Connection broken")
+                #     response_data += chunk
                 
-                response = json.loads(response_data.decode())
-                if response.get('status') == 'success':
-                    # После успешной отправки обновляем историю
-                    self.request_history(receiver)
-                    messagebox.showinfo("Success", "File sent successfully")
-                else:
-                    messagebox.showerror("Error", response.get('message', 'Failed to send file'))
+                # response = json.loads(response_data.decode())
+                # if response.get('status') == 'success':
+                #     # После успешной отправки обновляем историю
+                #     self.request_history(receiver)
+                #     messagebox.showinfo("Success", "File sent successfully")
+                # else:
+                #     messagebox.showerror("Error", response.get('message', 'Failed to send file'))
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to send file: {str(e)}")
@@ -556,9 +560,8 @@ class ChatClient:
             if not self.connected:
                 self.connect()
         finally:
-            # Восстанавливаем кнопку
-            self.send_file_btn.config(text="Send File", state='normal')
-            self.root.update()
+            # Восстанавливаем кнопку в основном потоке через after
+            self.root.after(100, lambda: self.send_file_btn.config(text="Send File", state='normal'))
 
     def receive_messages(self):
         """Receive messages from server"""
@@ -573,8 +576,9 @@ class ChatClient:
                 size = int.from_bytes(size_data, byteorder='big')
                 print(f"Received message size: {size}")
                 
-                if size > 1024 * 1024:  # Если размер больше 1MB, что-то не так
+                if size > 1024 * 1024:  # Если размер больше 1MB, что-то не так (можно увеличить, если нужно)
                     print(f"Invalid message size: {size}")
+                    buffer = b"" # Очищаем буфер после некорректного сообщения
                     continue
                 
                 # Получаем данные
