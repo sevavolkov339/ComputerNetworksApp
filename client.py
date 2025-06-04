@@ -210,8 +210,7 @@ class ChatClient:
             sender = msg.get('sender', '')
             content = msg.get('content', '')
             timestamp = msg.get('timestamp', '')
-            file_data = msg.get('file_data')
-            file_name = msg.get('file_name')
+            file_path = msg.get('file_path')
             is_self = sender == self.username
             color = '#18191c'
             bubble_bg = '#fff'
@@ -221,12 +220,13 @@ class ChatClient:
             box_width = 800
             
             # Формируем текст сообщения
-            if file_name and file_data:
+            if file_path:
+                file_name = os.path.basename(file_path)
                 display_text = f"📎 [File: {file_name}]"
+                # Сохраняем информацию о файле для обработки клика
                 self.file_links.append({
                     'index': idx,
-                    'file_name': file_name,
-                    'file_data': file_data,
+                    'file_path': file_path,
                     'x': x,
                     'y': y,
                     'w': box_width,
@@ -257,37 +257,115 @@ class ChatClient:
                 self.chat_canvas.tag_lower("current")
                 self.chat_canvas.tag_raise(text_id)
                 
-                if file_name and file_data:
+                if file_path:
+                    # Привязываем обработчик клика к тексту
                     self.chat_canvas.tag_bind(
                         text_id,
                         '<Button-1>',
-                        lambda e, i=idx: self.save_file(
-                            self.file_links[i]['file_name'],
-                            self.file_links[i]['file_data']
-                        )
+                        lambda e, path=file_path: self.handle_file_click(path)
                     )
             y += (bbox[3] - bbox[1] + 40) if bbox else 60
         self.chat_canvas.config(scrollregion=self.chat_canvas.bbox("all"))
         self.chat_canvas.yview_moveto(1.0)
 
-    def on_chat_click(self, event):
-        x, y = event.x, event.y
-        for file_link in self.file_links:
-            fx, fy, fw, fh = file_link['x'], file_link['y'], file_link['w'], file_link['h']
-            if fx <= x <= fx+fw and fy <= y <= fy+fh:
-                self.save_file(file_link['file_name'], file_link['file_data'])
-                break
+    def handle_file_click(self, file_path):
+        """Handle click on file in chat"""
+        try:
+            # Извлекаем имя файла из пути
+            file_name = os.path.basename(file_path)
+            
+            # Создаем диалог для выбора действия
+            dialog = tk.Toplevel(self.root)
+            dialog.title("File Action")
+            dialog.geometry("300x150")
+            dialog.transient(self.root)  # Делаем диалог модальным
+            dialog.grab_set()  # Захватываем фокус
+            
+            # Центрируем диалог
+            dialog.update_idletasks()
+            width = dialog.winfo_width()
+            height = dialog.winfo_height()
+            x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+            y = (dialog.winfo_screenheight() // 2) - (height // 2)
+            dialog.geometry(f'{width}x{height}+{x}+{y}')
+            
+            # Добавляем кнопки
+            button_frame = tk.Frame(dialog)
+            button_frame.pack(expand=True, fill='both', padx=20, pady=20)
+            
+            open_button = tk.Button(
+                button_frame,
+                text="Open",
+                font=self.pixel_font,
+                bg="#fff",
+                fg="#18191c",
+                bd=0,
+                highlightthickness=2,
+                highlightbackground="#000",
+                activebackground="#eaeaea",
+                width=10,
+                height=1,
+                command=lambda: [self.open_file(file_path), dialog.destroy()]
+            )
+            open_button.pack(side=tk.LEFT, padx=12)
+            
+            save_button = tk.Button(
+                button_frame,
+                text="Save As...",
+                font=self.pixel_font,
+                bg="#fff",
+                fg="#18191c",
+                bd=0,
+                highlightthickness=2,
+                highlightbackground="#000",
+                activebackground="#eaeaea",
+                width=12,
+                height=1,
+                command=lambda: [self.save_file(file_path), dialog.destroy()]
+            )
+            save_button.pack(side=tk.LEFT, padx=12)
+            
+            cancel_button = tk.Button(
+                button_frame,
+                text="Cancel",
+                font=self.pixel_font,
+                bg="#fff",
+                fg="#18191c",
+                bd=0,
+                highlightthickness=2,
+                highlightbackground="#000",
+                activebackground="#eaeaea",
+                width=10,
+                height=1,
+                command=dialog.destroy
+            )
+            cancel_button.pack(side=tk.LEFT, padx=12)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error handling file: {str(e)}")
 
-    def save_file(self, file_name, file_data):
-        """Save received file"""
+    def open_file(self, file_path):
+        """Open file"""
+        try:
+            if sys.platform == 'win32':
+                os.startfile(file_path)
+            elif sys.platform == 'darwin':  # macOS
+                subprocess.run(['open', file_path])
+            else:  # linux
+                subprocess.run(['xdg-open', file_path])
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open file: {str(e)}")
+
+    def save_file(self, file_path):
+        """Save file"""
         try:
             save_path = filedialog.asksaveasfilename(
-                initialfile=file_name,
-                defaultextension=os.path.splitext(file_name)[1]
+                initialfile=os.path.basename(file_path),
+                defaultextension=os.path.splitext(file_path)[1],
+                filetypes=[("All Files", "*.*")]
             )
             if save_path:
-                with open(save_path, 'wb') as f:
-                    f.write(base64.b64decode(file_data))
+                shutil.copy2(file_path, save_path)
                 messagebox.showinfo("Success", f"File saved to {save_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save file: {str(e)}")
@@ -565,81 +643,6 @@ class ChatClient:
     def run(self):
         """Start the client"""
         self.root.mainloop()
-
-    def create_chat_widget(self, username):
-        """Create chat widget for a user"""
-        chat_widget = tk.Frame(self.chat_frame)
-        chat_widget.pack(fill=tk.BOTH, expand=True)
-        
-        # Chat history
-        self.chat_history[username] = scrolledtext.ScrolledText(chat_widget, font=self.pixel_font, width=1400, height=600)
-        self.chat_history[username].pack(fill=tk.BOTH, expand=True)
-        
-        # Message input
-        input_layout = tk.Frame(chat_widget)
-        input_layout.pack(fill=tk.X)
-        
-        self.message_inputs[username] = tk.Entry(input_layout, font=self.pixel_font, width=1300)
-        self.message_inputs[username].pack(side=tk.LEFT, fill=tk.X)
-        self.message_inputs[username].bind('<Return>', lambda e: self.send_message(username))
-        
-        # Send button
-        send_button = tk.Button(input_layout, text="Send", font=self.pixel_font, bg="#fff", fg="#18191c", bd=0, highlightthickness=2, highlightbackground="#000", activebackground="#eaeaea", width=10, height=1, command=lambda: self.send_message(username))
-        send_button.pack(side=tk.LEFT, padx=12)
-        
-        # File button
-        file_button = tk.Button(input_layout, text="📎", font=self.pixel_font, bg="#fff", fg="#18191c", bd=0, highlightthickness=2, highlightbackground="#000", activebackground="#eaeaea", width=12, height=1, command=lambda: self.send_file(username))
-        file_button.pack(side=tk.LEFT, padx=12)
-        
-    def handle_file_click(self, file_path):
-        """Handle click on file in chat"""
-        try:
-            # Извлекаем имя файла из пути
-            file_name = os.path.basename(file_path)
-            
-            # Создаем диалог для выбора действия
-            dialog = tk.Toplevel()
-            dialog.title("File Action")
-            dialog.geometry("300x150")
-            
-            # Добавляем кнопки
-            open_button = tk.Button(dialog, text="Open", font=self.pixel_font, bg="#fff", fg="#18191c", bd=0, highlightthickness=2, highlightbackground="#000", activebackground="#eaeaea", width=10, height=1, command=lambda: self.open_file(file_path))
-            open_button.pack(side=tk.LEFT, padx=12)
-            
-            save_button = tk.Button(dialog, text="Save As...", font=self.pixel_font, bg="#fff", fg="#18191c", bd=0, highlightthickness=2, highlightbackground="#000", activebackground="#eaeaea", width=12, height=1, command=lambda: self.save_file(file_path))
-            save_button.pack(side=tk.LEFT, padx=12)
-            
-            cancel_button = tk.Button(dialog, text="Cancel", font=self.pixel_font, bg="#fff", fg="#18191c", bd=0, highlightthickness=2, highlightbackground="#000", activebackground="#eaeaea", width=10, height=1, command=dialog.destroy)
-            cancel_button.pack(side=tk.LEFT, padx=12)
-            
-        except Exception as e:
-            messagebox.showerror("Error", f"Error handling file: {str(e)}")
-
-    def open_file(self, file_path):
-        """Open file"""
-        if sys.platform == 'win32':
-            os.startfile(file_path)
-        elif sys.platform == 'darwin':  # macOS
-            subprocess.run(['open', file_path])
-        else:  # linux
-            subprocess.run(['xdg-open', file_path])
-
-    def save_file(self, file_path):
-        """Save file"""
-        try:
-            save_path, _ = filedialog.asksaveasfilename(
-                initialfile=os.path.basename(file_path),
-                defaultextension=os.path.splitext(file_path)[1],
-                filetypes=[("All Files", "*.*")]
-            )
-            if save_path:
-                with open(file_path, 'rb') as f:
-                    file_data = f.read()
-                with open(save_path, 'wb') as f:
-                    f.write(file_data)
-                messagebox.showinfo("Success", f"File saved to {save_path}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save file: {str(e)}")
 
     def update_chat_history(self, username, message, is_file=False, file_path=None):
         """Update chat history with new message"""
