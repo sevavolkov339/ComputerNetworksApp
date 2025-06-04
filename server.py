@@ -358,12 +358,12 @@ class ChatServer:
                 if username == receiver:
                     try:
                         forward_message = {
-                            'action': 'file',
+                            'action': 'message',
                             'sender': sender,
-                            'file_name': file_name,
-                            'file_data': file_data,
-                            'timestamp': datetime.now().isoformat(),
-                            'receiver': receiver
+                            'content': f"[File: {file_name}]",
+                            'is_file': True,
+                            'file_path': file_path,
+                            'timestamp': datetime.now().isoformat()
                         }
                         # Отправляем размер данных
                         json_data = json.dumps(forward_message, ensure_ascii=False).encode()
@@ -381,6 +381,7 @@ class ChatServer:
                     'action': 'file',
                     'status': 'success',
                     'file_name': file_name,
+                    'file_path': file_path,
                     'timestamp': datetime.now().isoformat()
                 }
                 response_data = json.dumps(confirmation, ensure_ascii=False).encode()
