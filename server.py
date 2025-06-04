@@ -305,8 +305,12 @@ class ChatServer:
                 client_socket.send(response_data)
                 return
             
-            # Save file
-            file_path = os.path.join('files', f"{datetime.now().timestamp()}_{file_name}")
+            # Save file with normalized path
+            timestamp = datetime.now().timestamp()
+            safe_filename = f"{timestamp}_{file_name}"
+            file_path = os.path.join('files', safe_filename)
+            file_path = os.path.normpath(file_path)
+            
             try:
                 with open(file_path, 'wb') as f:
                     f.write(file_bytes)

@@ -274,6 +274,11 @@ class ChatClient:
             # Извлекаем имя файла из пути
             file_name = os.path.basename(file_path)
             
+            # Проверяем существование файла
+            if not os.path.exists(file_path):
+                messagebox.showerror("Error", f"File not found: {file_path}")
+                return
+            
             # Создаем диалог для выбора действия
             dialog = tk.Toplevel(self.root)
             dialog.title("File Action")
@@ -347,10 +352,14 @@ class ChatClient:
     def open_file(self, file_path):
         """Open file"""
         try:
+            # Нормализуем путь для текущей ОС
+            file_path = os.path.normpath(file_path)
+            
             if sys.platform == 'win32':
                 os.startfile(file_path)
             elif sys.platform == 'darwin':  # macOS
-                subprocess.run(['open', file_path])
+                # Используем subprocess.run с shell=True для Mac
+                subprocess.run(['open', file_path], shell=True)
             else:  # linux
                 subprocess.run(['xdg-open', file_path])
         except Exception as e:
@@ -359,12 +368,21 @@ class ChatClient:
     def save_file(self, file_path):
         """Save file"""
         try:
+            # Нормализуем путь для текущей ОС
+            file_path = os.path.normpath(file_path)
+            
+            # Получаем имя файла без пути
+            file_name = os.path.basename(file_path)
+            
+            # Запрашиваем путь для сохранения
             save_path = filedialog.asksaveasfilename(
-                initialfile=os.path.basename(file_path),
-                defaultextension=os.path.splitext(file_path)[1],
+                initialfile=file_name,
+                defaultextension=os.path.splitext(file_name)[1],
                 filetypes=[("All Files", "*.*")]
             )
+            
             if save_path:
+                # Копируем файл
                 shutil.copy2(file_path, save_path)
                 messagebox.showinfo("Success", f"File saved to {save_path}")
         except Exception as e:
