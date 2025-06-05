@@ -436,33 +436,48 @@ class ChatClient:
             selected = self.contacts_listbox.curselection()
             if selected:
                 contact = self.contacts_listbox.get(selected[0])
-                # Обновляем историю только если сообщение/файл для текущего активного контакта
-                if contact == message.get('sender') or contact == message.get('receiver'):
-                    self.root.after(1, self.request_history, contact)
+                sender = message.get('sender')
+                receiver = message.get('receiver')
+                # Если сообщение для текущего активного контакта (получатель или отправитель),
+                # добавляем его напрямую в чат.
+                if contact == sender or (contact == receiver and sender != self.username): # Added check to not double-add own sent messages
+                    self.root.after(1, self.add_message_to_display, message)
+                # If the message is for a different contact, we don't add it to the current chat display.
+                # In a more complete application, you might add a notification/indicator for that contact.
             return
 
         # Обрабатываем только подтверждение об отправке файла (status=success, action=file)
+        # Это сообщение приходит отправителю после успешной передачи файла на сервер и его сохранения.
         if message.get('action') == 'file' and message.get('status') == 'success':
              selected = self.contacts_listbox.curselection()
              if selected:
                  contact = self.contacts_listbox.get(selected[0])
-                 # Обновляем историю только если подтверждение для текущего активного контакта (отправителя)
-                 if contact == message.get('receiver'): # Сервер отправляет подтверждение отправителю, который указан как receiver в этом сообщении
-                     self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
-                     # Обновляем историю после успешной отправки (это для отправителя)
-                     self.root.after(1, self.request_history, contact)
-                     
+                 # Если подтверждение для текущего активного контакта (отправителя),
+                 # добавляем отправленный файл в чат отправителя.
+                 # We already add the sent file in send_file's callback after a short delay,
+                 # so we might not need to add it again here based on the server confirmation.
+                 # Let's keep it for now but be mindful of potential duplicates.
+                 if contact == message.get('receiver') and message.get('sender') == self.username:
+                      self.root.after(1, messagebox.showinfo, "Success", "File sent successfully")
+                     # self.root.after(1, self.add_message_to_display, message) # Removed to avoid potential duplicates
+
         elif message.get('action') == 'contacts':
             if message.get('status') == 'success':
                 if 'contacts' in message:
                     self.contacts_listbox.delete(0, tk.END)
                     for contact in message['contacts']:
                         self.contacts_listbox.insert(tk.END, contact)
-                    # Если есть контакты, выбираем первый и загружаем его историю в основном потоке через after
-                    if message['contacts']:
-                        self.root.after(1, lambda c=message['contacts'][0]: self.contacts_listbox.selection_set(0) or self.request_history(c))
+                    # Если есть контакты и ни один не выбран, выбираем первый и загружаем его историю
+                    # Only load history if no contact is currently selected, to avoid clearing active chat
+                    if message['contacts'] and not self.contacts_listbox.curselection():
+                         self.root.after(1, lambda c=message['contacts'][0]: self.contacts_listbox.selection_set(0) or self.request_history(c))
+
             if message.get('message') == 'Contact added successfully':
                 self.root.after(1, self.load_contacts)
+
+        elif message.get('action') == 'history':
+             # При получении полной истории, очищаем текущий чат и отображаем историю
+             self.root.after(1, self.display_history, message.get('messages', []))
 
     def request_history(self, contact):
         """Request chat history with a contact"""
@@ -571,66 +586,87 @@ class ChatClient:
     def receive_messages(self):
         """Receive messages from server"""
         buffer = b""
+        # Define a fixed buffer size for initial reads, though the message size dictates total read
+        # receive_buffer_size = 4096 # This was implicit before, making it explicit might help debugging
         while self.connected:
             try:
-                # Сначала получаем размер данных
-                size_data = self.socket.recv(4)
-                if not size_data:
-                    print("Connection closed by server")
-                    break
-                size = int.from_bytes(size_data, byteorder='big')
-                print(f"Received message size: {size}")
-                
-                if size > 1024 * 1024:  # Если размер больше 1MB, что-то не так (можно увеличить, если нужно)
-                    print(f"Invalid message size: {size}")
-                    buffer = b"" # Очищаем буфер после некорректного сообщения
-                    continue
-                
-                # Получаем данные
-                data = self.socket.recv(min(size, 8192))
-                if not data:
-                    print("No data received")
-                    break
-                    
-                buffer += data
-                while len(buffer) < size:
-                    data = self.socket.recv(min(size - len(buffer), 8192))
-                    if not data:
+                # Ensure we have at least 4 bytes in the buffer to read the size
+                while len(buffer) < 4:
+                    packet = self.socket.recv(8192) # Read in chunks
+                    if not packet:
+                        print("Connection closed by server during size read")
+                        self.connected = False
                         break
-                    buffer += data
-                
-                if len(buffer) == size:
-                    try:
-                        message = json.loads(buffer.decode())
-                        print(f"Processing message: {message}")
-                        self.handle_message(message)
-                    except json.JSONDecodeError as e:
-                        print(f"JSON decode error: {str(e)}")
-                    except Exception as e:
-                        print(f"Error processing message: {str(e)}")
-                    buffer = b""
-                
+                    buffer += packet
+                if not self.connected: break
+
+                # Read the message size from the first 4 bytes of the buffer
+                size = int.from_bytes(buffer[:4], byteorder='big')
+                # Remove the size bytes from the buffer
+                buffer = buffer[4:]
+
+                # print(f"Received message size: {size}") # Keep this for debugging if needed
+
+                if size > 1024 * 1024 * 10:  # Increased limit to 10MB for larger files, was 1MB
+                    print(f"Invalid or excessively large message size: {size}. Discarding buffer.")
+                    buffer = b"" # Discard buffer on excessively large size
+                    continue # Go back to start of while self.connected loop
+
+                # Ensure we have the complete message data in the buffer
+                message_data = b""
+                while len(message_data) < size:
+                    # Read the remaining required bytes for the message
+                    bytes_to_read = size - len(message_data)
+                    packet = self.socket.recv(min(bytes_to_read, 8192)) # Read in chunks
+                    if not packet:
+                        print("Connection closed by server during message data read")
+                        self.connected = False
+                        break
+                    message_data += packet
+                if not self.connected: break # Check again if connection closed during data read
+
+                # We now have exactly 'size' bytes for the message data
+                try:
+                    message = json.loads(message_data.decode())
+                    # print(f"Processing message: {message}") # Keep for debugging
+                    self.handle_message(message)
+                    # Buffer is already updated by slicing after size read
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {str(e)}. Discarding incomplete message.")
+                    # On decode error, discard the current message data but keep the rest of the buffer
+                    # buffer remains as is after slicing, ready for next potential message size header.
+                except Exception as e:
+                    print(f"Error processing message: {str(e)}")
+                    # Similar to JSON decode error, keep remaining buffer
+
             except socket.error as e:
                 print(f"Socket error: {str(e)}")
-                if not self.connected:
-                    break
-                # Try to reconnect
+                self.connected = False
+                # Attempt to reconnect only if the error wasn't due to clean disconnect
+                # This part might need more sophisticated reconnection logic
                 try:
-                    self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    self.socket.connect((self.host, self.port))
-                except:
-                    break
+                     print("Attempting to reconnect...")
+                     self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                     self.socket.connect((self.host, self.port))
+                     self.connected = True
+                     print("Reconnection successful.")
+                     # After successful reconnection, need to re-authenticate
+                     # This is a limitation of current design - re-login is manual.
+                     # A better approach would be to send login details automatically.
+                except Exception as reconnect_e:
+                     print(f"Reconnection failed: {str(reconnect_e)}")
+                     break # Exit thread if reconnection fails
             except Exception as e:
-                print(f"Error receiving message: {str(e)}")
-                if not self.connected:
-                    break
-                
-        self.connected = False
+                print(f"Error in receive_messages loop: {str(e)}")
+                self.connected = False # Assume critical error, close connection
+
+        # Clean up socket when thread exits
         try:
             self.socket.close()
-        except:
-            pass
-        
+            print("Socket closed.")
+        except Exception as close_e:
+            print(f"Error closing socket: {str(close_e)}")
+
     def load_contacts(self):
         """Load contact list"""
         print("Loading contacts...")
@@ -673,55 +709,80 @@ class ChatClient:
 
     def update_chat_history(self, username, message, is_file=False, file_path=None):
         """Update chat history with new message"""
-        if username not in self.chat_history:
-            return
-            
-        cursor = self.chat_history[username].text.index(tk.END)
-        
-        # Add timestamp
-        timestamp = datetime.now().strftime("%H:%M")
-        self.chat_history[username].insert(cursor, f'\n{timestamp}\n')
-        
-        # Add message
-        if is_file and file_path:
-            # Создаем кликабельную ссылку на файл
-            file_name = os.path.basename(file_path)
-            self.chat_history[username].insert(cursor, f'\n📎 {file_name}\n')
-        else:
-            self.chat_history[username].insert(cursor, f'\n{message}\n')
-            
-        self.chat_history[username].see(tk.END)
+        # This method is no longer used for adding new messages directly to the display.
+        # New messages for the active chat are now handled by add_message_to_display.
+        # It might still be relevant if you implement a separate history view or logging.
+        # Keeping it here for now, but its role has changed.
+        pass # Or keep relevant logic if needed elsewhere
 
-    def handle_server_message(self, message):
-        """Handle incoming message from server"""
+    def add_message_to_display(self, message):
+        """Adds a single message to the chat display."""
+        sender = message.get('sender', '')
+        content = message.get('content', '')
+        timestamp = message.get('timestamp', '')
+        file_path = message.get('file_path')
+        is_self = sender == self.username
+        color = '#18191c' # Not directly used for text, but good to keep consistent
+        bubble_bg = '#fff' if not is_self else '#00ff99' # Different background for sent messages
+        text_fg = '#18191c'
+        # Adjust x position and anchor based on sender
+        x = self.chat_canvas.winfo_width() - 40 if is_self else 40
+        anchor = 'e' if is_self else 'w'
+        box_width = self.chat_canvas.winfo_width() - 80 # Adjust box width based on canvas size
+
+        # Format the timestamp
         try:
-            action = message.get('action')
-            
-            if action == 'message':
-                sender = message.get('sender')
-                content = message.get('content')
-                is_file = message.get('is_file', False)
-                file_path = message.get('file_path')
-                
-                if sender in self.chat_history:
-                    self.update_chat_history(sender, content, is_file, file_path)
-                    
-            elif action == 'file':
-                status = message.get('status')
-                if status == 'success':
-                    file_name = message.get('file_name')
-                    file_path = message.get('file_path')
-                    sender = message.get('sender')
-                    
-                    if sender in self.chat_history:
-                        self.update_chat_history(sender, f"Sent file: {file_name}", True, file_path)
-                else:
-                    error_msg = message.get('message', 'Unknown error')
-                    messagebox.showerror("Error", f"File transfer failed: {error_msg}")
-                    
-        except Exception as e:
-            print(f"Error handling server message: {str(e)}")
-            messagebox.showerror("Error", f"Error handling server message: {str(e)}")
+            # Assuming timestamp is in ISO format from server
+            dt_object = datetime.fromisoformat(timestamp)
+            formatted_timestamp = dt_object.strftime("%H:%M")
+        except ValueError:
+            formatted_timestamp = timestamp # Use original if formatting fails
+
+        # Формируем текст сообщения
+        if file_path:
+            file_name = os.path.basename(file_path)
+            display_text = f"📎 [File: {file_name}]"
+            # Note: File links are currently managed by display_history.
+            # For real-time addition, we might need to adjust how file_links are stored and managed.
+            # For now, the text with filename will be displayed. Clicking functionality might
+            # still rely on a full history refresh or require more complex handling here.
+        else:
+            display_text = content if content is not None else ''
+
+        # Рисуем облачко
+        text_content = f"{sender} ({formatted_timestamp}):\n{display_text}"
+        text_id = self.chat_canvas.create_text(
+            x, self.chat_canvas.bbox("all")[3] + 20 if self.chat_canvas.find_all() else 20, # Position below the last item
+            text=text_content,
+            anchor=anchor,
+            font=self.pixel_font,
+            fill=text_fg,
+            width=box_width
+        )
+
+        bbox = self.chat_canvas.bbox(text_id)
+        if bbox:
+            rect_id = self.chat_canvas.create_rectangle(
+                bbox[0]-16, bbox[1]-8,
+                bbox[2]+16, bbox[3]+8,
+                fill=bubble_bg,
+                outline="#eaeaea",
+                width=2
+            )
+            self.chat_canvas.tag_lower(rect_id, text_id) # Draw rectangle behind text
+
+            if file_path:
+                 # Bind click handler to the text for files
+                self.chat_canvas.tag_bind(
+                    text_id,
+                    '<Button-1>',
+                    lambda e, path=file_path: self.handle_file_click(path)
+                )
+
+
+        # Update scroll region and scroll to the bottom
+        self.chat_canvas.config(scrollregion=self.chat_canvas.bbox("all"))
+        self.chat_canvas.yview_moveto(1.0)
 
 if __name__ == '__main__':
     client = ChatClient()
